@@ -5,6 +5,7 @@ from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.sql import SqlManagementClient
 import pandas as pd
 import re
+import time
 from config import get_credentials, get_subscription_id
 from typing import Dict, Any
 import os
@@ -19,6 +20,16 @@ class AzureSecurityAnalyzer:
         self.storage_client = StorageManagementClient(self.credentials, self.subscription_id)
         self.compute_client = ComputeManagementClient(self.credentials, self.subscription_id)
         self.sql_client = SqlManagementClient(self.credentials, self.subscription_id)
+        self._last_api_call = 0
+        self._api_call_delay = 1  # 1 second delay between API calls
+
+    def _rate_limit(self):
+        """Simple rate limiter to prevent too many API calls"""
+        current_time = time.time()
+        time_since_last_call = current_time - self._last_api_call
+        if time_since_last_call < self._api_call_delay:
+            time.sleep(self._api_call_delay - time_since_last_call)
+        self._last_api_call = time.time()
 
     def _validate_credentials(self) -> None:
         """Validate Azure credentials before initialization"""
@@ -41,6 +52,7 @@ class AzureSecurityAnalyzer:
     def analyze_secure_score(self) -> pd.DataFrame:
         """Analyze Azure Secure Score"""
         try:
+            self._rate_limit()
             secure_scores = self.security_client.secure_scores.list()
             scores = []
             for score in secure_scores:
@@ -59,6 +71,7 @@ class AzureSecurityAnalyzer:
     def analyze_nsgs(self) -> pd.DataFrame:
         """Analyze Network Security Groups"""
         try:
+            self._rate_limit()
             nsgs = self.network_client.network_security_groups.list_all()
             nsg_data = []
             for nsg in nsgs:
@@ -77,6 +90,7 @@ class AzureSecurityAnalyzer:
     def analyze_storage_accounts(self) -> pd.DataFrame:
         """Analyze Storage Account Security"""
         try:
+            self._rate_limit()
             storage_accounts = self.storage_client.storage_accounts.list()
             storage_data = []
             for account in storage_accounts:
@@ -97,6 +111,7 @@ class AzureSecurityAnalyzer:
     def analyze_vms(self) -> pd.DataFrame:
         """Analyze Virtual Machine Security"""
         try:
+            self._rate_limit()
             vms = self.compute_client.virtual_machines.list_all()
             vm_data = []
             for vm in vms:
@@ -116,6 +131,7 @@ class AzureSecurityAnalyzer:
     def analyze_sql_databases(self) -> pd.DataFrame:
         """Analyze SQL Database Security"""
         try:
+            self._rate_limit()
             servers = self.sql_client.servers.list()
             sql_data = []
             for server in servers:

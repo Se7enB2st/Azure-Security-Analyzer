@@ -5,6 +5,8 @@ import sys
 from typing import Dict, Any
 import json
 from datetime import datetime
+import re
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(
@@ -17,6 +19,45 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def _contains_sensitive_data(text: str) -> bool:
+    """Check if text contains potentially sensitive data"""
+    sensitive_patterns = [
+        r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',  # Phone numbers
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email addresses
+        r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',  # SSN-like patterns
+        r'\b[A-Za-z0-9]{32,}\b',  # Long strings that might be hashes or keys
+    ]
+    
+    for pattern in sensitive_patterns:
+        if re.search(pattern, text):
+            return True
+    return False
+
+def _sanitize_results(results: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize results by removing or masking sensitive data"""
+    sanitized = {}
+    for key, df in results.items():
+        if df.empty:
+            sanitized[key] = df
+            continue
+            
+        # Convert DataFrame to dictionary for processing
+        data = df.to_dict(orient='records')
+        sanitized_data = []
+        
+        for record in data:
+            sanitized_record = {}
+            for k, v in record.items():
+                if isinstance(v, str) and _contains_sensitive_data(v):
+                    sanitized_record[k] = '[REDACTED]'
+                else:
+                    sanitized_record[k] = v
+            sanitized_data.append(sanitized_record)
+            
+        sanitized[key] = pd.DataFrame(sanitized_data)
+    
+    return sanitized
+
 def save_results_to_file(results: Dict[str, Any], filename: str = None) -> None:
     """Save analysis results to a JSON file"""
     if filename is None:
@@ -24,9 +65,12 @@ def save_results_to_file(results: Dict[str, Any], filename: str = None) -> None:
         filename = f'security_analysis_{timestamp}.json'
     
     try:
+        # Sanitize results before saving
+        sanitized_results = _sanitize_results(results)
+        
         # Convert DataFrames to dictionaries
         serializable_results = {}
-        for key, df in results.items():
+        for key, df in sanitized_results.items():
             serializable_results[key] = df.to_dict(orient='records')
         
         with open(filename, 'w') as f:
