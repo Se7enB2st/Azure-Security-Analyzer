@@ -5,4 +5,5 @@ azure-mgmt-storage>=21.0.0
 azure-mgmt-compute>=29.0.0
 azure-mgmt-sql>=3.0.1
 pandas>=1.5.0
-python-dotenv>=1.0.0 
+python-dotenv>=1.0.0
+tqdm>=4.65.0 

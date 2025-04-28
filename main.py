@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 import re
 import pandas as pd
+from tqdm import tqdm
 
 # Configure logging
 logging.basicConfig(
@@ -58,8 +59,46 @@ def _sanitize_results(results: Dict[str, Any]) -> Dict[str, Any]:
     
     return sanitized
 
-def save_results_to_file(results: Dict[str, Any], filename: str = None) -> None:
-    """Save analysis results to a JSON file"""
+def generate_summary(results: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+    """Generate a summary of the analysis results"""
+    summary = {}
+    for analysis_name, df in results.items():
+        if df.empty:
+            summary[analysis_name] = {
+                'status': 'Failed',
+                'items_analyzed': 0
+            }
+            continue
+            
+        summary[analysis_name] = {
+            'status': 'Success',
+            'items_analyzed': len(df),
+            'key_metrics': {}
+        }
+        
+        # Add specific metrics based on analysis type
+        if analysis_name == 'Secure Score':
+            if 'Percentage' in df.columns:
+                summary[analysis_name]['key_metrics']['average_score'] = df['Percentage'].mean()
+        elif analysis_name == 'Network Security Groups':
+            if 'Rules Count' in df.columns:
+                summary[analysis_name]['key_metrics']['average_rules'] = df['Rules Count'].mean()
+        elif analysis_name == 'Storage Accounts':
+            if 'Https Only' in df.columns:
+                summary[analysis_name]['key_metrics']['https_enabled'] = df['Https Only'].sum()
+            if 'Blob Public Access' in df.columns:
+                summary[analysis_name]['key_metrics']['public_access'] = df['Blob Public Access'].sum()
+        elif analysis_name == 'Virtual Machines':
+            if 'Encryption Status' in df.columns:
+                summary[analysis_name]['key_metrics']['encrypted'] = df['Encryption Status'].value_counts().to_dict()
+        elif analysis_name == 'SQL Databases':
+            if 'TDE Status' in df.columns:
+                summary[analysis_name]['key_metrics']['tde_enabled'] = df['TDE Status'].value_counts().to_dict()
+    
+    return summary
+
+def save_results_to_file(results: Dict[str, Any], summary: Dict[str, Any], filename: str = None) -> None:
+    """Save analysis results and summary to a JSON file"""
     if filename is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'security_analysis_{timestamp}.json'
@@ -73,8 +112,15 @@ def save_results_to_file(results: Dict[str, Any], filename: str = None) -> None:
         for key, df in sanitized_results.items():
             serializable_results[key] = df.to_dict(orient='records')
         
+        # Combine results and summary
+        output = {
+            'timestamp': datetime.now().isoformat(),
+            'summary': summary,
+            'detailed_results': serializable_results
+        }
+        
         with open(filename, 'w') as f:
-            json.dump(serializable_results, f, indent=4)
+            json.dump(output, f, indent=4)
         logger.info(f"Results saved to {filename}")
     except Exception as e:
         logger.error(f"Failed to save results: {str(e)}")
@@ -88,22 +134,49 @@ def main():
         analyzer = AzureSecurityAnalyzer()
         logger.info("Azure Security Analyzer initialized successfully")
         
-        # Run all analyses
+        # Run all analyses with progress bar
         logger.info("Running security analyses...")
-        results = analyzer.run_all_analyses()
+        analyses = [
+            'Secure Score',
+            'Network Security Groups',
+            'Storage Accounts',
+            'Virtual Machines',
+            'SQL Databases'
+        ]
         
-        # Print results
-        print("\n=== Azure Security Analysis Results ===\n")
+        results = {}
+        with tqdm(total=len(analyses), desc="Analyzing", unit="analysis") as pbar:
+            for analysis in analyses:
+                try:
+                    if analysis == 'Secure Score':
+                        results[analysis] = analyzer.analyze_secure_score()
+                    elif analysis == 'Network Security Groups':
+                        results[analysis] = analyzer.analyze_nsgs()
+                    elif analysis == 'Storage Accounts':
+                        results[analysis] = analyzer.analyze_storage_accounts()
+                    elif analysis == 'Virtual Machines':
+                        results[analysis] = analyzer.analyze_vms()
+                    elif analysis == 'SQL Databases':
+                        results[analysis] = analyzer.analyze_sql_databases()
+                except Exception as e:
+                    logger.error(f"Error in {analysis}: {str(e)}")
+                    results[analysis] = pd.DataFrame()
+                pbar.update(1)
         
-        for analysis_name, df in results.items():
-            print(f"\n{analysis_name}:")
-            if not df.empty:
-                print(df.to_string())
-            else:
-                print("No data available or error occurred during analysis")
+        # Generate and display summary
+        summary = generate_summary(results)
+        print("\n=== Analysis Summary ===")
+        for analysis, stats in summary.items():
+            print(f"\n{analysis}:")
+            print(f"  Status: {stats['status']}")
+            print(f"  Items Analyzed: {stats['items_analyzed']}")
+            if 'key_metrics' in stats:
+                print("  Key Metrics:")
+                for metric, value in stats['key_metrics'].items():
+                    print(f"    {metric}: {value}")
         
         # Save results to file
-        save_results_to_file(results)
+        save_results_to_file(results, summary)
         
         logger.info("Security analysis completed successfully")
         
