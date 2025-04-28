@@ -6,22 +6,62 @@ from azure.mgmt.sql import SqlManagementClient
 import pandas as pd
 import re
 import time
-from config import get_credentials, get_subscription_id
+from config import get_credentials, get_subscription_id, get_timeout, retry_with_backoff
 from typing import Dict, Any
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AzureSecurityAnalyzer:
     def __init__(self):
         self._validate_credentials()
         self.credentials = get_credentials()
         self.subscription_id = get_subscription_id()
-        self.security_client = SecurityCenter(self.credentials, self.subscription_id)
-        self.network_client = NetworkManagementClient(self.credentials, self.subscription_id)
-        self.storage_client = StorageManagementClient(self.credentials, self.subscription_id)
-        self.compute_client = ComputeManagementClient(self.credentials, self.subscription_id)
-        self.sql_client = SqlManagementClient(self.credentials, self.subscription_id)
+        self.timeout = get_timeout()
+        
+        # Initialize clients with timeout
+        self.security_client = SecurityCenter(
+            self.credentials, 
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        self.network_client = NetworkManagementClient(
+            self.credentials, 
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        self.storage_client = StorageManagementClient(
+            self.credentials, 
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        self.compute_client = ComputeManagementClient(
+            self.credentials, 
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        self.sql_client = SqlManagementClient(
+            self.credentials, 
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        
         self._last_api_call = 0
         self._api_call_delay = 1  # 1 second delay between API calls
+        
+        # Validate permissions
+        self._validate_permissions()
+
+    def _validate_permissions(self) -> None:
+        """Validate that the service principal has required permissions"""
+        try:
+            # Try to list resources to check permissions
+            retry_with_backoff(self.security_client.secure_scores.list)
+            logger.info("Successfully validated security permissions")
+        except Exception as e:
+            logger.error(f"Permission validation failed: {str(e)}")
+            raise ValueError("Service principal does not have required permissions. Please ensure it has at least Reader role.")
 
     def _rate_limit(self):
         """Simple rate limiter to prevent too many API calls"""
@@ -53,7 +93,7 @@ class AzureSecurityAnalyzer:
         """Analyze Azure Secure Score"""
         try:
             self._rate_limit()
-            secure_scores = self.security_client.secure_scores.list()
+            secure_scores = retry_with_backoff(self.security_client.secure_scores.list)
             scores = []
             for score in secure_scores:
                 if not isinstance(score.score.current, (int, float)) or not isinstance(score.score.max, (int, float)):
@@ -65,14 +105,14 @@ class AzureSecurityAnalyzer:
                 })
             return pd.DataFrame(scores)
         except Exception as e:
-            print(f"Error analyzing secure score: {str(e)}")
+            logger.error(f"Error analyzing secure score: {str(e)}")
             return pd.DataFrame()
 
     def analyze_nsgs(self) -> pd.DataFrame:
         """Analyze Network Security Groups"""
         try:
             self._rate_limit()
-            nsgs = self.network_client.network_security_groups.list_all()
+            nsgs = retry_with_backoff(self.network_client.network_security_groups.list_all)
             nsg_data = []
             for nsg in nsgs:
                 if not hasattr(nsg, 'name') or not hasattr(nsg, 'location'):
@@ -84,14 +124,14 @@ class AzureSecurityAnalyzer:
                 })
             return pd.DataFrame(nsg_data)
         except Exception as e:
-            print(f"Error analyzing NSGs: {str(e)}")
+            logger.error(f"Error analyzing NSGs: {str(e)}")
             return pd.DataFrame()
 
     def analyze_storage_accounts(self) -> pd.DataFrame:
         """Analyze Storage Account Security"""
         try:
             self._rate_limit()
-            storage_accounts = self.storage_client.storage_accounts.list()
+            storage_accounts = retry_with_backoff(self.storage_client.storage_accounts.list)
             storage_data = []
             for account in storage_accounts:
                 if not hasattr(account, 'name') or not hasattr(account, 'location'):
@@ -105,14 +145,14 @@ class AzureSecurityAnalyzer:
                 })
             return pd.DataFrame(storage_data)
         except Exception as e:
-            print(f"Error analyzing storage accounts: {str(e)}")
+            logger.error(f"Error analyzing storage accounts: {str(e)}")
             return pd.DataFrame()
 
     def analyze_vms(self) -> pd.DataFrame:
         """Analyze Virtual Machine Security"""
         try:
             self._rate_limit()
-            vms = self.compute_client.virtual_machines.list_all()
+            vms = retry_with_backoff(self.compute_client.virtual_machines.list_all)
             vm_data = []
             for vm in vms:
                 if not hasattr(vm, 'name') or not hasattr(vm, 'location'):
@@ -125,19 +165,23 @@ class AzureSecurityAnalyzer:
                 })
             return pd.DataFrame(vm_data)
         except Exception as e:
-            print(f"Error analyzing VMs: {str(e)}")
+            logger.error(f"Error analyzing VMs: {str(e)}")
             return pd.DataFrame()
 
     def analyze_sql_databases(self) -> pd.DataFrame:
         """Analyze SQL Database Security"""
         try:
             self._rate_limit()
-            servers = self.sql_client.servers.list()
+            servers = retry_with_backoff(self.sql_client.servers.list)
             sql_data = []
             for server in servers:
                 if not hasattr(server, 'name') or not hasattr(server, 'location'):
                     continue
-                databases = self.sql_client.databases.list_by_server(server.resource_group_name, server.name)
+                databases = retry_with_backoff(
+                    self.sql_client.databases.list_by_server,
+                    server.resource_group_name,
+                    server.name
+                )
                 for db in databases:
                     sql_data.append({
                         'Server': self._sanitize_resource_name(server.name),
@@ -148,7 +192,7 @@ class AzureSecurityAnalyzer:
                     })
             return pd.DataFrame(sql_data)
         except Exception as e:
-            print(f"Error analyzing SQL databases: {str(e)}")
+            logger.error(f"Error analyzing SQL databases: {str(e)}")
             return pd.DataFrame()
 
     def run_all_analyses(self) -> Dict[str, pd.DataFrame]:
