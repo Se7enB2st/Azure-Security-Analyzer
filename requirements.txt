@@ -1,0 +1,8 @@
+azure-identity>=1.12.0
+azure-mgmt-security>=5.0.0
+azure-mgmt-network>=21.0.0
+azure-mgmt-storage>=21.0.0
+azure-mgmt-compute>=29.0.0
+azure-mgmt-sql>=3.0.1
+pandas>=1.5.0
+python-dotenv>=1.0.0 
