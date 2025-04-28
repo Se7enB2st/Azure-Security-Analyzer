@@ -3,6 +3,8 @@ from azure.mgmt.network import NetworkManagementClient
 from azure.mgmt.storage import StorageManagementClient
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.sql import SqlManagementClient
+from azure.mgmt.keyvault import KeyVaultManagementClient
+from azure.mgmt.resource import ResourceManagementClient
 import pandas as pd
 import re
 import time
@@ -43,6 +45,16 @@ class AzureSecurityAnalyzer:
         )
         self.sql_client = SqlManagementClient(
             self.credentials, 
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        self.keyvault_client = KeyVaultManagementClient(
+            self.credentials,
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        self.resource_client = ResourceManagementClient(
+            self.credentials,
             self.subscription_id,
             timeout=self.timeout
         )
@@ -195,6 +207,114 @@ class AzureSecurityAnalyzer:
             logger.error(f"Error analyzing SQL databases: {str(e)}")
             return pd.DataFrame()
 
+    def analyze_key_vaults(self) -> pd.DataFrame:
+        """Analyze Key Vault security settings"""
+        try:
+            self._rate_limit()
+            vaults = retry_with_backoff(self.keyvault_client.vaults.list)
+            vault_data = []
+            for vault in vaults:
+                if not hasattr(vault, 'name') or not hasattr(vault, 'location'):
+                    continue
+                vault_data.append({
+                    'Name': self._sanitize_resource_name(vault.name),
+                    'Location': self._sanitize_resource_name(vault.location),
+                    'Soft Delete Enabled': vault.properties.enable_soft_delete if hasattr(vault.properties, 'enable_soft_delete') else False,
+                    'Purge Protection': vault.properties.enable_purge_protection if hasattr(vault.properties, 'enable_purge_protection') else False,
+                    'Network ACLs': bool(vault.properties.network_acls) if hasattr(vault.properties, 'network_acls') else False
+                })
+            return pd.DataFrame(vault_data)
+        except Exception as e:
+            logger.error(f"Error analyzing Key Vaults: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_resource_locks(self) -> pd.DataFrame:
+        """Analyze resource locks for critical resources"""
+        try:
+            self._rate_limit()
+            locks = retry_with_backoff(self.resource_client.management_locks.list_at_subscription_level)
+            lock_data = []
+            for lock in locks:
+                if not hasattr(lock, 'name') or not hasattr(lock, 'level'):
+                    continue
+                lock_data.append({
+                    'Name': self._sanitize_resource_name(lock.name),
+                    'Level': lock.level,
+                    'Notes': lock.notes if hasattr(lock, 'notes') else ''
+                })
+            return pd.DataFrame(lock_data)
+        except Exception as e:
+            logger.error(f"Error analyzing resource locks: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_network_security(self) -> pd.DataFrame:
+        """Analyze network security settings"""
+        try:
+            self._rate_limit()
+            # Get network security groups
+            nsgs = retry_with_backoff(self.network_client.network_security_groups.list_all)
+            security_data = []
+            
+            for nsg in nsgs:
+                if not hasattr(nsg, 'name') or not hasattr(nsg, 'location'):
+                    continue
+                
+                # Analyze NSG rules
+                inbound_rules = [r for r in nsg.security_rules if r.direction.lower() == 'inbound'] if nsg.security_rules else []
+                outbound_rules = [r for r in nsg.security_rules if r.direction.lower() == 'outbound'] if nsg.security_rules else []
+                
+                # Check for risky rules
+                risky_inbound = sum(1 for r in inbound_rules if r.access.lower() == 'allow' and r.destination_port_range == '*')
+                risky_outbound = sum(1 for r in outbound_rules if r.access.lower() == 'allow' and r.destination_port_range == '*')
+                
+                security_data.append({
+                    'Name': self._sanitize_resource_name(nsg.name),
+                    'Location': self._sanitize_resource_name(nsg.location),
+                    'Total Rules': len(nsg.security_rules) if nsg.security_rules else 0,
+                    'Inbound Rules': len(inbound_rules),
+                    'Outbound Rules': len(outbound_rules),
+                    'Risky Inbound Rules': risky_inbound,
+                    'Risky Outbound Rules': risky_outbound
+                })
+            
+            return pd.DataFrame(security_data)
+        except Exception as e:
+            logger.error(f"Error analyzing network security: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_storage_security(self) -> pd.DataFrame:
+        """Analyze storage account security settings"""
+        try:
+            self._rate_limit()
+            storage_accounts = retry_with_backoff(self.storage_client.storage_accounts.list)
+            storage_data = []
+            
+            for account in storage_accounts:
+                if not hasattr(account, 'name') or not hasattr(account, 'location'):
+                    continue
+                
+                # Get blob service properties
+                blob_service = retry_with_backoff(
+                    self.storage_client.blob_services.get_service_properties,
+                    account.resource_group_name,
+                    account.name
+                )
+                
+                storage_data.append({
+                    'Name': self._sanitize_resource_name(account.name),
+                    'Location': self._sanitize_resource_name(account.location),
+                    'Https Only': account.enable_https_traffic_only,
+                    'Blob Public Access': account.allow_blob_public_access,
+                    'Minimum TLS Version': account.minimum_tls_version if hasattr(account, 'minimum_tls_version') else 'Unknown',
+                    'Versioning Enabled': blob_service.is_versioning_enabled if hasattr(blob_service, 'is_versioning_enabled') else False,
+                    'Soft Delete Enabled': blob_service.delete_retention_policy.enabled if hasattr(blob_service, 'delete_retention_policy') else False
+                })
+            
+            return pd.DataFrame(storage_data)
+        except Exception as e:
+            logger.error(f"Error analyzing storage security: {str(e)}")
+            return pd.DataFrame()
+
     def run_all_analyses(self) -> Dict[str, pd.DataFrame]:
         """Run all security analyses and return combined results"""
         if not self._validate_subscription_id(self.subscription_id):
@@ -205,6 +325,10 @@ class AzureSecurityAnalyzer:
             'Network Security Groups': self.analyze_nsgs(),
             'Storage Accounts': self.analyze_storage_accounts(),
             'Virtual Machines': self.analyze_vms(),
-            'SQL Databases': self.analyze_sql_databases()
+            'SQL Databases': self.analyze_sql_databases(),
+            'Key Vaults': self.analyze_key_vaults(),
+            'Resource Locks': self.analyze_resource_locks(),
+            'Network Security': self.analyze_network_security(),
+            'Storage Security': self.analyze_storage_security()
         }
         return results 
