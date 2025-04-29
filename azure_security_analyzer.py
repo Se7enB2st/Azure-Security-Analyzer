@@ -7,6 +7,7 @@ from azure.mgmt.keyvault import KeyVaultManagementClient
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.authorization import AuthorizationManagementClient
 from azure.mgmt.policyinsights import PolicyInsightsClient
+from azure.mgmt.policy import PolicyClient
 from azure.graphrbac import GraphRbacManagementClient
 import pandas as pd
 import re
@@ -74,6 +75,13 @@ class AzureSecurityAnalyzer:
         
         # Initialize Policy Insights client
         self.policy_client = PolicyInsightsClient(
+            self.credentials,
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        
+        # Initialize Policy client for definitions and assignments
+        self.policy_management_client = PolicyClient(
             self.credentials,
             self.subscription_id,
             timeout=self.timeout
@@ -468,6 +476,87 @@ class AzureSecurityAnalyzer:
             logger.error(f"Error analyzing policy compliance: {str(e)}")
             return pd.DataFrame()
 
+    def analyze_policy_assignments(self) -> pd.DataFrame:
+        """Analyze Azure Policy assignments"""
+        try:
+            self._rate_limit()
+            assignments = retry_with_backoff(
+                self.policy_management_client.policy_assignments.list
+            )
+            
+            assignment_data = []
+            for assignment in assignments:
+                if not hasattr(assignment, 'name') or not hasattr(assignment, 'display_name'):
+                    continue
+                
+                # Get enforcement mode and parameters
+                enforcement_mode = getattr(assignment, 'enforcement_mode', 'Default')
+                parameters = getattr(assignment, 'parameters', {})
+                
+                # Get scope information
+                scope = assignment.scope
+                scope_type = 'Subscription' if '/subscriptions/' in scope else 'Resource Group' if '/resourceGroups/' in scope else 'Management Group'
+                
+                assignment_data.append({
+                    'Assignment Name': self._sanitize_resource_name(assignment.name),
+                    'Display Name': assignment.display_name,
+                    'Policy Definition ID': assignment.policy_definition_id,
+                    'Scope': scope,
+                    'Scope Type': scope_type,
+                    'Enforcement Mode': enforcement_mode,
+                    'Parameters Count': len(parameters),
+                    'Description': getattr(assignment, 'description', ''),
+                    'Created By': getattr(assignment, 'created_by', 'Unknown'),
+                    'Created On': getattr(assignment, 'created_on', 'Unknown')
+                })
+            
+            return pd.DataFrame(assignment_data)
+        except Exception as e:
+            logger.error(f"Error analyzing policy assignments: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_policy_definitions(self) -> pd.DataFrame:
+        """Analyze Azure Policy definitions"""
+        try:
+            self._rate_limit()
+            definitions = retry_with_backoff(
+                self.policy_management_client.policy_definitions.list
+            )
+            
+            definition_data = []
+            for definition in definitions:
+                if not hasattr(definition, 'name') or not hasattr(definition, 'display_name'):
+                    continue
+                
+                # Get policy type and mode
+                policy_type = getattr(definition, 'policy_type', 'Unknown')
+                policy_mode = getattr(definition, 'mode', 'Unknown')
+                
+                # Get metadata
+                metadata = getattr(definition, 'metadata', {})
+                category = metadata.get('category', 'Unknown')
+                version = metadata.get('version', 'Unknown')
+                
+                # Get parameters
+                parameters = getattr(definition, 'parameters', {})
+                
+                definition_data.append({
+                    'Definition Name': self._sanitize_resource_name(definition.name),
+                    'Display Name': definition.display_name,
+                    'Policy Type': policy_type,
+                    'Policy Mode': policy_mode,
+                    'Category': category,
+                    'Version': version,
+                    'Parameters Count': len(parameters),
+                    'Description': getattr(definition, 'description', ''),
+                    'Effect': getattr(definition, 'policy_rule', {}).get('then', {}).get('effect', 'Unknown')
+                })
+            
+            return pd.DataFrame(definition_data)
+        except Exception as e:
+            logger.error(f"Error analyzing policy definitions: {str(e)}")
+            return pd.DataFrame()
+
     def run_all_analyses(self) -> Dict[str, pd.DataFrame]:
         """Run all security analyses"""
         if not self._validate_subscription_id(self.subscription_id):
@@ -487,6 +576,8 @@ class AzureSecurityAnalyzer:
             'Role Assignments': self.analyze_role_assignments(),
             'Security Center': self.analyze_network_security_center(),
             'Firewall Rules': self.analyze_firewall_rules(),
-            'Policy Compliance': self.analyze_policy_compliance()
+            'Policy Compliance': self.analyze_policy_compliance(),
+            'Policy Assignments': self.analyze_policy_assignments(),
+            'Policy Definitions': self.analyze_policy_definitions()
         }
         return analyses 
