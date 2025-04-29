@@ -9,6 +9,7 @@ from azure.mgmt.authorization import AuthorizationManagementClient
 from azure.mgmt.policyinsights import PolicyInsightsClient
 from azure.mgmt.policy import PolicyClient
 from azure.graphrbac import GraphRbacManagementClient
+from azure.mgmt.msi import ManagedServiceIdentityClient
 import pandas as pd
 import re
 import time
@@ -82,6 +83,13 @@ class AzureSecurityAnalyzer:
         
         # Initialize Policy client for definitions and assignments
         self.policy_management_client = PolicyClient(
+            self.credentials,
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        
+        # Initialize MSI client for managed identities
+        self.msi_client = ManagedServiceIdentityClient(
             self.credentials,
             self.subscription_id,
             timeout=self.timeout
@@ -557,6 +565,121 @@ class AzureSecurityAnalyzer:
             logger.error(f"Error analyzing policy definitions: {str(e)}")
             return pd.DataFrame()
 
+    def analyze_service_principals(self) -> pd.DataFrame:
+        """Analyze Azure Service Principals"""
+        try:
+            self._rate_limit()
+            # Get all service principals
+            sps = retry_with_backoff(self.graph_client.service_principals.list)
+            
+            sp_data = []
+            for sp in sps:
+                if not hasattr(sp, 'app_id') or not hasattr(sp, 'display_name'):
+                    continue
+                
+                # Get app roles and oauth2 permissions
+                app_roles = getattr(sp, 'app_roles', [])
+                oauth2_permissions = getattr(sp, 'oauth2_permissions', [])
+                
+                # Get key credentials and password credentials
+                key_creds = getattr(sp, 'key_credentials', [])
+                password_creds = getattr(sp, 'password_credentials', [])
+                
+                # Get owners
+                owners = []
+                try:
+                    owner_list = retry_with_backoff(
+                        self.graph_client.service_principals.list_owners,
+                        sp.object_id
+                    )
+                    owners = [owner.display_name for owner in owner_list]
+                except Exception:
+                    pass
+                
+                sp_data.append({
+                    'Display Name': sp.display_name,
+                    'App ID': sp.app_id,
+                    'Object ID': sp.object_id,
+                    'Enabled': sp.account_enabled,
+                    'App Roles Count': len(app_roles),
+                    'OAuth2 Permissions Count': len(oauth2_permissions),
+                    'Key Credentials Count': len(key_creds),
+                    'Password Credentials Count': len(password_creds),
+                    'Owners Count': len(owners),
+                    'Created On': getattr(sp, 'created_date_time', 'Unknown'),
+                    'Last Password Change': max(
+                        [cred.end_date_time for cred in password_creds],
+                        default='Never'
+                    ),
+                    'Last Key Rotation': max(
+                        [cred.end_date_time for cred in key_creds],
+                        default='Never'
+                    )
+                })
+            
+            return pd.DataFrame(sp_data)
+        except Exception as e:
+            logger.error(f"Error analyzing service principals: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_managed_identities(self) -> pd.DataFrame:
+        """Analyze Azure Managed Identities"""
+        try:
+            self._rate_limit()
+            # Get all user-assigned managed identities
+            user_assigned_identities = retry_with_backoff(
+                self.msi_client.user_assigned_identities.list_by_subscription
+            )
+            
+            identity_data = []
+            
+            # Process user-assigned identities
+            for identity in user_assigned_identities:
+                if not hasattr(identity, 'name') or not hasattr(identity, 'location'):
+                    continue
+                
+                # Get associated resources
+                associated_resources = []
+                try:
+                    resources = retry_with_backoff(
+                        self.resource_client.resources.list,
+                        filter=f"identity.userAssignedIdentities/contains(keys, '{identity.name}')"
+                    )
+                    associated_resources = [resource.name for resource in resources]
+                except Exception:
+                    pass
+                
+                identity_data.append({
+                    'Name': self._sanitize_resource_name(identity.name),
+                    'Type': 'User-Assigned',
+                    'Location': self._sanitize_resource_name(identity.location),
+                    'Resource Group': identity.id.split('/')[4],
+                    'Associated Resources Count': len(associated_resources),
+                    'Principal ID': getattr(identity, 'principal_id', 'Unknown'),
+                    'Client ID': getattr(identity, 'client_id', 'Unknown'),
+                    'Tenant ID': getattr(identity, 'tenant_id', 'Unknown')
+                })
+            
+            # Get system-assigned identities from VMs
+            vms = retry_with_backoff(self.compute_client.virtual_machines.list_all)
+            for vm in vms:
+                if hasattr(vm, 'identity') and vm.identity and vm.identity.type == 'SystemAssigned':
+                    identity_data.append({
+                        'Name': self._sanitize_resource_name(vm.name),
+                        'Type': 'System-Assigned',
+                        'Location': self._sanitize_resource_name(vm.location),
+                        'Resource Group': vm.id.split('/')[4],
+                        'Associated Resources Count': 1,
+                        'Principal ID': vm.identity.principal_id,
+                        'Client ID': vm.identity.client_id,
+                        'Tenant ID': vm.identity.tenant_id
+                    })
+            
+            return pd.DataFrame(identity_data)
+        except Exception as e:
+            logger.error(f"Error analyzing managed identities: {str(e)}")
+            return pd.DataFrame()
+
     def run_all_analyses(self) -> Dict[str, pd.DataFrame]:
         """Run all security analyses"""
         if not self._validate_subscription_id(self.subscription_id):
@@ -578,6 +701,8 @@ class AzureSecurityAnalyzer:
             'Firewall Rules': self.analyze_firewall_rules(),
             'Policy Compliance': self.analyze_policy_compliance(),
             'Policy Assignments': self.analyze_policy_assignments(),
-            'Policy Definitions': self.analyze_policy_definitions()
+            'Policy Definitions': self.analyze_policy_definitions(),
+            'Service Principals': self.analyze_service_principals(),
+            'Managed Identities': self.analyze_managed_identities()
         }
         return analyses 
