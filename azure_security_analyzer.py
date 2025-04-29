@@ -5,6 +5,8 @@ from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.sql import SqlManagementClient
 from azure.mgmt.keyvault import KeyVaultManagementClient
 from azure.mgmt.resource import ResourceManagementClient
+from azure.mgmt.authorization import AuthorizationManagementClient
+from azure.graphrbac import GraphRbacManagementClient
 import pandas as pd
 import re
 import time
@@ -56,6 +58,16 @@ class AzureSecurityAnalyzer:
         self.resource_client = ResourceManagementClient(
             self.credentials,
             self.subscription_id,
+            timeout=self.timeout
+        )
+        self.auth_client = AuthorizationManagementClient(
+            self.credentials,
+            self.subscription_id,
+            timeout=self.timeout
+        )
+        self.graph_client = GraphRbacManagementClient(
+            self.credentials,
+            os.getenv('AZURE_TENANT_ID'),
             timeout=self.timeout
         )
         
@@ -315,6 +327,106 @@ class AzureSecurityAnalyzer:
             logger.error(f"Error analyzing storage security: {str(e)}")
             return pd.DataFrame()
 
+    def analyze_azure_ad_security(self) -> pd.DataFrame:
+        """Analyze Azure AD security settings"""
+        try:
+            self._rate_limit()
+            ad_data = []
+            
+            # Get conditional access policies
+            policies = retry_with_backoff(self.graph_client.conditional_access_policies.list)
+            for policy in policies:
+                ad_data.append({
+                    'Type': 'Conditional Access Policy',
+                    'Name': policy.display_name,
+                    'State': policy.state,
+                    'Users Included': len(policy.conditions.users.include_users) if hasattr(policy.conditions, 'users') else 0,
+                    'Users Excluded': len(policy.conditions.users.exclude_users) if hasattr(policy.conditions, 'users') else 0,
+                    'Applications Included': len(policy.conditions.applications.include_applications) if hasattr(policy.conditions, 'applications') else 0
+                })
+            
+            # Get MFA status
+            mfa_status = retry_with_backoff(self.graph_client.users.list)
+            for user in mfa_status:
+                ad_data.append({
+                    'Type': 'MFA Status',
+                    'Name': user.display_name,
+                    'MFA Enabled': user.mfa_enabled if hasattr(user, 'mfa_enabled') else False,
+                    'Account Enabled': user.account_enabled
+                })
+            
+            return pd.DataFrame(ad_data)
+        except Exception as e:
+            logger.error(f"Error analyzing Azure AD security: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_role_assignments(self) -> pd.DataFrame:
+        """Analyze role assignments and permissions"""
+        try:
+            self._rate_limit()
+            role_data = []
+            
+            # Get all role assignments
+            assignments = retry_with_backoff(self.auth_client.role_assignments.list)
+            for assignment in assignments:
+                role_data.append({
+                    'Principal Name': assignment.principal_name,
+                    'Role Name': assignment.role_definition_name,
+                    'Scope': assignment.scope,
+                    'Assignment Type': assignment.type
+                })
+            
+            return pd.DataFrame(role_data)
+        except Exception as e:
+            logger.error(f"Error analyzing role assignments: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_network_security_center(self) -> pd.DataFrame:
+        """Analyze Azure Security Center recommendations"""
+        try:
+            self._rate_limit()
+            security_data = []
+            
+            # Get security recommendations
+            recommendations = retry_with_backoff(self.security_client.recommendations.list)
+            for rec in recommendations:
+                security_data.append({
+                    'Name': rec.name,
+                    'Severity': rec.severity,
+                    'Status': rec.status,
+                    'Resource Type': rec.resource_type,
+                    'Recommendation': rec.description
+                })
+            
+            return pd.DataFrame(security_data)
+        except Exception as e:
+            logger.error(f"Error analyzing Security Center: {str(e)}")
+            return pd.DataFrame()
+
+    def analyze_firewall_rules(self) -> pd.DataFrame:
+        """Analyze Azure Firewall rules"""
+        try:
+            self._rate_limit()
+            firewall_data = []
+            
+            # Get Azure Firewall rules
+            firewalls = retry_with_backoff(self.network_client.azure_firewalls.list_all)
+            for firewall in firewalls:
+                if hasattr(firewall, 'ip_configurations'):
+                    for config in firewall.ip_configurations:
+                        firewall_data.append({
+                            'Name': firewall.name,
+                            'Location': firewall.location,
+                            'Public IP': config.public_ip_address if hasattr(config, 'public_ip_address') else 'None',
+                            'Private IP': config.private_ip_address if hasattr(config, 'private_ip_address') else 'None',
+                            'Threat Intel Mode': firewall.threat_intel_mode if hasattr(firewall, 'threat_intel_mode') else 'Alert'
+                        })
+            
+            return pd.DataFrame(firewall_data)
+        except Exception as e:
+            logger.error(f"Error analyzing firewall rules: {str(e)}")
+            return pd.DataFrame()
+
     def run_all_analyses(self) -> Dict[str, pd.DataFrame]:
         """Run all security analyses and return combined results"""
         if not self._validate_subscription_id(self.subscription_id):
@@ -329,6 +441,10 @@ class AzureSecurityAnalyzer:
             'Key Vaults': self.analyze_key_vaults(),
             'Resource Locks': self.analyze_resource_locks(),
             'Network Security': self.analyze_network_security(),
-            'Storage Security': self.analyze_storage_security()
+            'Storage Security': self.analyze_storage_security(),
+            'Azure AD Security': self.analyze_azure_ad_security(),
+            'Role Assignments': self.analyze_role_assignments(),
+            'Security Center': self.analyze_network_security_center(),
+            'Firewall Rules': self.analyze_firewall_rules()
         }
         return results 

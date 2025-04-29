@@ -4,11 +4,45 @@ A Python tool to analyze security configurations of Azure cloud resources.
 
 ## Features
 
-- Assess Azure Secure Score
-- Analyze Network Security Groups (NSGs)
-- Check Storage Account security
-- Evaluate Virtual Machine configurations
-- Audit SQL Database security settings
+- **Core Security Analysis**
+  - Assess Azure Secure Score
+  - Analyze Network Security Groups (NSGs)
+  - Check Storage Account security
+  - Evaluate Virtual Machine configurations
+  - Audit SQL Database security settings
+  - Azure AD Security Analysis
+    - Conditional Access Policies
+    - MFA Status
+    - User Account Status
+  - Role-Based Access Control (RBAC)
+    - Role Assignment Analysis
+    - Permission Level Assessment
+    - Over-Privileged Account Detection
+  - Security Center Integration
+    - Security Recommendations
+    - Severity-based Analysis
+    - Resource-specific Security Status
+  - Firewall Security
+    - Azure Firewall Configuration
+    - Threat Intelligence Settings
+    - Network Traffic Analysis
+
+- **Enhanced Security Measurements**
+  - Key Vault Security Analysis
+    - Soft delete configuration
+    - Purge protection status
+    - Network ACLs
+  - Resource Protection
+    - Resource lock analysis
+    - Critical resource identification
+  - Network Security
+    - Detailed NSG rule analysis
+    - Risky rule identification
+    - Inbound/Outbound traffic analysis
+  - Storage Security
+    - Versioning status
+    - Soft delete configuration
+    - TLS and access settings
 
 ## Prerequisites
 
@@ -45,12 +79,13 @@ pip install -r requirements.txt
    - Note down the client secret value
 
 2. Set up your Azure credentials:
-   - Copy `config.example.py` to `config.py`
-   - Fill in your Azure credentials in `config.py`:
-     - AZURE_TENANT_ID
-     - AZURE_CLIENT_ID
-     - AZURE_CLIENT_SECRET
-     - AZURE_SUBSCRIPTION_ID
+   - Create a `.env` file with your Azure credentials:
+     ```
+     AZURE_TENANT_ID=your_tenant_id
+     AZURE_CLIENT_ID=your_client_id
+     AZURE_CLIENT_SECRET=your_client_secret
+     AZURE_SUBSCRIPTION_ID=your_subscription_id
+     ```
 
 3. Grant necessary permissions to the Service Principal:
    - Go to Azure Portal → Subscriptions → Your Subscription → Access Control (IAM)
@@ -68,25 +103,57 @@ python main.py
 
 The tool will:
 - Analyze security configurations across your Azure resources
-- Display results in the console
+- Display a progress bar during analysis
+- Show a summary of findings
 - Save detailed results to a JSON file
 - Log operations to `security_analysis.log`
 
-## Security Considerations
+### Analysis Output
 
-- Never commit your `config.py` file to version control
-- Keep your Azure credentials secure
-- Regularly rotate your client secrets
-- Use the minimum required permissions for the Service Principal
-- Review the generated logs and results files for sensitive information
+The tool provides:
+1. **Progress Tracking**
+   - Real-time progress bar
+   - Status updates for each analysis
+2. **Comprehensive Security Reports**
+   - Azure AD Security Status
+   - RBAC Analysis
+   - Security Center Recommendations
+   - Firewall Configuration Analysis
+   - Resource Security Status
+3. **Detailed Logging**
+   - Operation tracking
+   - Error reporting
+   - Security findings
+
+## Security Features
+
+- **Input Validation**
+  - Sanitization of resource names
+  - Validation of subscription IDs
+  - Secure credential handling
+
+- **Rate Limiting**
+  - API call throttling
+  - Request queuing
+  - Error handling
+
+- **Sensitive Data Protection**
+  - Secure credential storage
+  - Environment variable usage
+  - Log sanitization
+
+- **Error Handling**
+  - Graceful failure recovery
+  - Detailed error logging
+  - Retry mechanisms
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 
 ```bash
