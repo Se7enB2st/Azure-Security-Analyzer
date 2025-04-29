@@ -6,6 +6,7 @@ from azure.mgmt.sql import SqlManagementClient
 from azure.mgmt.keyvault import KeyVaultManagementClient
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.authorization import AuthorizationManagementClient
+from azure.mgmt.policyinsights import PolicyInsightsClient
 from azure.graphrbac import GraphRbacManagementClient
 import pandas as pd
 import re
@@ -68,6 +69,13 @@ class AzureSecurityAnalyzer:
         self.graph_client = GraphRbacManagementClient(
             self.credentials,
             os.getenv('AZURE_TENANT_ID'),
+            timeout=self.timeout
+        )
+        
+        # Initialize Policy Insights client
+        self.policy_client = PolicyInsightsClient(
+            self.credentials,
+            self.subscription_id,
             timeout=self.timeout
         )
         
@@ -427,14 +435,47 @@ class AzureSecurityAnalyzer:
             logger.error(f"Error analyzing firewall rules: {str(e)}")
             return pd.DataFrame()
 
+    def analyze_policy_compliance(self) -> pd.DataFrame:
+        """Analyze Azure Policy compliance across resources"""
+        try:
+            self._rate_limit()
+            policy_states = retry_with_backoff(
+                self.policy_client.policy_states.list_query_results_for_subscription,
+                policy_states_resource='latest',
+                subscription_id=self.subscription_id
+            )
+            
+            compliance_data = []
+            for state in policy_states:
+                if not hasattr(state, 'compliance_state') or not hasattr(state, 'resource_id'):
+                    continue
+                    
+                resource_id = state.resource_id
+                resource_name = resource_id.split('/')[-1]
+                resource_type = resource_id.split('/')[6]  # Resource type is typically at this index
+                
+                compliance_data.append({
+                    'Resource Name': self._sanitize_resource_name(resource_name),
+                    'Resource Type': self._sanitize_resource_name(resource_type),
+                    'Compliance State': state.compliance_state,
+                    'Policy Definition ID': state.policy_definition_id,
+                    'Policy Assignment ID': state.policy_assignment_id,
+                    'Timestamp': state.timestamp.isoformat() if hasattr(state, 'timestamp') else 'Unknown'
+                })
+            
+            return pd.DataFrame(compliance_data)
+        except Exception as e:
+            logger.error(f"Error analyzing policy compliance: {str(e)}")
+            return pd.DataFrame()
+
     def run_all_analyses(self) -> Dict[str, pd.DataFrame]:
-        """Run all security analyses and return combined results"""
+        """Run all security analyses"""
         if not self._validate_subscription_id(self.subscription_id):
             raise ValueError("Invalid subscription ID format")
             
-        results = {
+        analyses = {
             'Secure Score': self.analyze_secure_score(),
-            'Network Security Groups': self.analyze_nsgs(),
+            'NSGs': self.analyze_nsgs(),
             'Storage Accounts': self.analyze_storage_accounts(),
             'Virtual Machines': self.analyze_vms(),
             'SQL Databases': self.analyze_sql_databases(),
@@ -445,6 +486,7 @@ class AzureSecurityAnalyzer:
             'Azure AD Security': self.analyze_azure_ad_security(),
             'Role Assignments': self.analyze_role_assignments(),
             'Security Center': self.analyze_network_security_center(),
-            'Firewall Rules': self.analyze_firewall_rules()
+            'Firewall Rules': self.analyze_firewall_rules(),
+            'Policy Compliance': self.analyze_policy_compliance()
         }
-        return results 
+        return analyses 
