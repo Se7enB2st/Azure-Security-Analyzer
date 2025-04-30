@@ -27,6 +27,34 @@ A Python tool to analyze security configurations of Azure cloud resources.
     - Threat Intelligence Settings
     - Network Traffic Analysis
 
+- **Identity and Access Management (IAM)**
+  - Service Principal Analysis
+    - App Roles and Permissions
+    - Credential Management
+    - Ownership Tracking
+    - Last Password/Key Rotation
+  - Managed Identity Security
+    - User-Assigned Identities
+    - System-Assigned Identities
+    - Associated Resources
+    - Identity Configuration
+
+- **Azure Policy Analysis**
+  - Policy Compliance Status
+    - Resource-level Compliance
+    - Policy Definition Details
+    - Assignment Tracking
+  - Policy Definitions
+    - Policy Types and Modes
+    - Category and Version
+    - Parameter Analysis
+    - Policy Effects
+  - Policy Assignments
+    - Scope Analysis
+    - Enforcement Mode
+    - Parameter Configuration
+    - Assignment Details
+
 - **Enhanced Security Measurements**
   - Key Vault Security Analysis
     - Soft delete configuration
@@ -93,6 +121,10 @@ pip install -r requirements.txt
      - Role: Reader
      - Select your Service Principal
      - Save
+   - Additional permissions required:
+     - Microsoft Graph API permissions for Service Principal analysis
+     - Azure Policy permissions for policy analysis
+     - Managed Identity permissions for identity analysis
 
 ## Usage
 
@@ -120,6 +152,13 @@ The tool provides:
    - Security Center Recommendations
    - Firewall Configuration Analysis
    - Resource Security Status
+   - IAM Analysis
+     - Service Principal Security
+     - Managed Identity Security
+   - Policy Analysis
+     - Compliance Status
+     - Policy Definitions
+     - Policy Assignments
 3. **Detailed Logging**
    - Operation tracking
    - Error reporting
