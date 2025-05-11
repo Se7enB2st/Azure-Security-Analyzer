@@ -7,7 +7,6 @@ from azure.mgmt.keyvault import KeyVaultManagementClient
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.authorization import AuthorizationManagementClient
 from azure.mgmt.policyinsights import PolicyInsightsClient
-from azure.mgmt.policy import PolicyClient
 from azure.graphrbac import GraphRbacManagementClient
 from azure.mgmt.msi import ManagedServiceIdentityClient
 import pandas as pd
